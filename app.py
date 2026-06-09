@@ -882,7 +882,7 @@ def main():
         "Use this tool to format bank upload files into a standardized Excel output with a light pink theme."
     )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["DASHBOARD", "MONITORING", "MASTERLIST", "HSBC UAE MASTERLIST", "DIB MASTERLIST", "MONITORING DATA", "ADMIN SETTINGS"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["DASHBOARD", "MONITORING", "MASTERLIST", "HSBC UAE MASTERLIST", "COMPILED UPLOADS", "DIB MASTERLIST", "MONITORING DATA", "ADMIN SETTINGS"])
 
     with tab1:
         st.header("Dashboard")
@@ -1008,6 +1008,8 @@ def main():
             selected_type = st.selectbox("Type", ["All Types"] + MASTERLIST_TYPES, key="hsbc_inventory_type")
 
         hsbc_upload = st.file_uploader("Upload HSBC UAE masterlist workbook", type=["xlsx", "xlsm"], key="hsbc_masterlist")
+        inventory_records = []
+
         if hsbc_upload is not None:
             try:
                 rows = read_uploaded_workbook(hsbc_upload)
@@ -1015,60 +1017,76 @@ def main():
 
                 if not inventory_records:
                     st.warning("No masterlist inventory records detected in the uploaded file. Please verify the worksheet layout and headers.")
-                else:
-                    selected_date_filter = selected_date
-                    selected_placement_filter = None if selected_placement == "All Placements" else selected_placement
-                    selected_type_filter = None if selected_type == "All Types" else selected_type
-
-                    summary = build_inventory_pivot(
-                        inventory_records,
-                        selected_date=selected_date_filter,
-                        selected_placement=selected_placement_filter,
-                        selected_type=selected_type_filter,
-                    )
-                    daily_summary = build_daily_masterlist_summary(inventory_records)
-
-                    if summary:
-                        total_count = sum(row[f"{placement} Count"] for row in summary for placement in PLACEMENTS)
-                        total_sum = sum(row[f"{placement} Sum"] for row in summary for placement in PLACEMENTS)
-
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric(label="Records Count", value=str(total_count), label_visibility="visible")
-                        with col2:
-                            st.metric(label="Total Amount", value=f"{total_sum:,.2f}", label_visibility="visible")
-                        with col3:
-                            st.metric(label="Daily Groups", value=str(len(summary)), label_visibility="visible")
-
-                        st.subheader("Daily Masterlist Summary")
-                        st.dataframe(daily_summary, use_container_width=True, height=340)
-
-                        st.subheader("Placement / Type Breakdown")
-                        placement_type_table = build_placement_type_table(inventory_records)
-                        st.dataframe(placement_type_table, use_container_width=True, height=420)
-
-                        st.subheader("SPMAW / SPMAN / SPQA by Day")
-                        st.dataframe(
-                            [row for row in placement_type_table if row["Placement"] in PLACEMENTS],
-                            use_container_width=True,
-                            height=420,
-                        )
-
-                        st.caption("This table shows all dates up to today, separated by placement and transaction type: MASTERLIST, NEW ENDO, PULL OUT.")
-
-                        stored_path = save_masterlist_upload_history(
-                            hsbc_upload,
-                            record_count=total_count,
-                            total_amount=total_sum,
-                            summary_rows=daily_summary,
-                        )
-                        st.success(f"Masterlist saved for re-checking at: {stored_path}")
-                    else:
-                        st.warning("No inventory records match the selected filters.")
             except Exception as error:
                 st.error(f"Error processing HSBC UAE masterlist: {error}")
 
+        if inventory_records:
+            selected_date_filter = selected_date
+            selected_placement_filter = None if selected_placement == "All Placements" else selected_placement
+            selected_type_filter = None if selected_type == "All Types" else selected_type
+
+            summary = build_inventory_pivot(
+                inventory_records,
+                selected_date=selected_date_filter,
+                selected_placement=selected_placement_filter,
+                selected_type=selected_type_filter,
+            )
+            daily_summary = build_daily_masterlist_summary(inventory_records)
+
+            if summary:
+                total_count = sum(row[f"{placement} Count"] for row in summary for placement in PLACEMENTS)
+                total_sum = sum(row[f"{placement} Sum"] for row in summary for placement in PLACEMENTS)
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric(label="Records Count", value=str(total_count), label_visibility="visible")
+                with col2:
+                    st.metric(label="Total Amount", value=f"{total_sum:,.2f}", label_visibility="visible")
+                with col3:
+                    st.metric(label="Daily Groups", value=str(len(summary)), label_visibility="visible")
+
+                st.subheader("Daily Masterlist Summary")
+                st.dataframe(daily_summary, use_container_width=True, height=340)
+
+                st.subheader("Placement / Type Breakdown")
+                placement_type_table = build_placement_type_table(inventory_records)
+                st.dataframe(placement_type_table, use_container_width=True, height=420)
+
+                st.subheader("SPMAW / SPMAN / SPQA by Day")
+                st.dataframe(
+                    [row for row in placement_type_table if row["Placement"] in PLACEMENTS],
+                    use_container_width=True,
+                    height=420,
+                )
+
+                st.caption("This table shows all dates up to today, separated by placement and transaction type: MASTERLIST, NEW ENDO, PULL OUT.")
+
+                if hsbc_upload is not None:
+                    stored_path = save_masterlist_upload_history(
+                        hsbc_upload,
+                        record_count=total_count,
+                        total_amount=total_sum,
+                        summary_rows=daily_summary,
+                    )
+                    st.success(f"Masterlist saved for re-checking at: {stored_path}")
+            else:
+                st.warning("No inventory records match the selected filters.")
+        else:
+            st.info("Upload an HSBC UAE workbook to generate the daily masterlist, NEW ENDO, PULL OUT, and placement summary tables.")
+
     with tab5:
+        st.header("Compiled Uploads")
+        st.markdown("Saved HSBC masterlist uploads for re-checking and review.")
+
+        history = fetch_upload_history(limit=20)
+        if history:
+            st.dataframe(history, use_container_width=True, height=420)
+            for item in history:
+                st.caption(f"File: {item['file_name']} | Stored at: {item['stored_path']} | Records: {item['record_count']} | Amount: {item['total_amount']:.2f}")
+        else:
+            st.info("No compiled uploads have been saved yet. Upload a masterlist file in the HSBC UAE MASTERLIST tab to create history.")
+
+    with tab6:
         st.header("DIB Masterlist Processor")
         st.markdown(
             """
@@ -1096,12 +1114,12 @@ def main():
             except Exception as error:
                 st.error(f"Error processing DIB masterlist: {error}")
 
-    with tab6:
+    with tab7:
         st.header("Monitoring Data")
         st.write("View detailed monitoring data and analytics.")
         st.info("Data visualization features coming soon.")
 
-    with tab7:
+    with tab8:
         st.header("Admin Settings")
         st.write("Manage account notifications and login settings.")
 
