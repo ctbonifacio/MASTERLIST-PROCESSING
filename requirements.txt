@@ -1,0 +1,4 @@
+openpyxl>=3.0
+streamlit>=1.24
+mysql-connector-python>=8.0
+python-dotenv>=0.19
