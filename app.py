@@ -971,12 +971,12 @@ def main():
             except Exception as error:
                 st.error(f"Error processing DIB masterlist: {error}")
 
-    with tab5:
+    with tab6:
         st.header("Monitoring Data")
         st.write("View detailed monitoring data and analytics.")
         st.info("Data visualization features coming soon.")
 
-    with tab6:
+    with tab7:
         st.header("Admin Settings")
         st.write("Manage account notifications and login settings.")
 
