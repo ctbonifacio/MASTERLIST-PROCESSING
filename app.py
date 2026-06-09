@@ -103,6 +103,7 @@ DIB_SHEET_NAME_CANDIDATES = {
 
 # Database Configuration
 DATABASE_FILE = "masterlist.db"
+UPLOAD_HISTORY_DIR = os.path.join(os.path.dirname(__file__), "uploads", "masterlist_history")
 
 def get_db_connection():
     """Create a new database connection to SQLite for the current thread."""
@@ -467,8 +468,8 @@ def build_masterlist_inventory_records(rows):
 
     header_row = rows[0]
     date_idx = find_column_index(header_row, DATE_HEADER_CANDIDATES, fallback=0)
-    placement_idx = find_column_index(header_row, PLACEMENT_HEADER_CANDIDATES)
-    type_idx = find_column_index(header_row, TYPE_HEADER_CANDIDATES)
+    placement_idx = find_column_index(header_row, PLACEMENT_HEADER_CANDIDATES, fallback=1)
+    type_idx = find_column_index(header_row, TYPE_HEADER_CANDIDATES, fallback=2)
     sum_idx = find_column_index(header_row, SUM_HEADER_CANDIDATES, fallback=8)
 
     records = []
@@ -485,16 +486,16 @@ def build_masterlist_inventory_records(rows):
         placement = ""
         if placement_idx is not None and placement_idx < len(row):
             placement = str(row[placement_idx]).strip().upper() if row[placement_idx] is not None else ""
-        if not placement and len(row) > 0:
-            candidate = str(row[0]).strip().upper() if row[0] is not None else ""
+        if not placement and len(row) > 1:
+            candidate = str(row[1]).strip().upper() if row[1] is not None else ""
             if candidate in PLACEMENTS:
                 placement = candidate
 
         type_value = ""
         if type_idx is not None and type_idx < len(row):
             type_value = str(row[type_idx]).strip().upper() if row[type_idx] is not None else ""
-        if not type_value and len(row) > 1:
-            candidate = str(row[1]).strip().upper() if row[1] is not None else ""
+        if not type_value and len(row) > 2:
+            candidate = str(row[2]).strip().upper() if row[2] is not None else ""
             if candidate in MASTERLIST_TYPES:
                 type_value = candidate
 
@@ -546,6 +547,53 @@ def build_inventory_summary(records, selected_date=None, selected_placement=None
         })
 
     return sorted(rows, key=lambda x: (x["Date"], x["Placement"], x["Type"]))
+
+
+def build_daily_masterlist_summary(records):
+    summary = {}
+    for record in records:
+        day = record["date"].isoformat() if record["date"] else "UNKNOWN"
+        type_value = record["type"] or "UNKNOWN"
+        placement = record["placement"] or "UNKNOWN"
+        key = (day, placement, type_value)
+        if key not in summary:
+            summary[key] = {"count": 0, "sum": 0.0}
+        summary[key]["count"] += 1
+        summary[key]["sum"] += record["sum"]
+
+    rows = []
+    for (day, type_value, placement), values in sorted(summary.items(), key=lambda item: (item[0][0], item[0][1], item[0][2])):
+        rows.append({
+            "Date": day,
+            "Type": type_value,
+            "Placement": placement,
+            "Count": values["count"],
+            "Total Amount": values["sum"],
+        })
+    return rows
+
+
+def build_placement_type_table(records):
+    grouped = {}
+    for record in records:
+        day = record["date"].isoformat() if record["date"] else "UNKNOWN"
+        placement = record["placement"] or "UNKNOWN"
+        type_value = record["type"] or "UNKNOWN"
+        key = (day, placement, type_value)
+        grouped.setdefault(key, {"count": 0, "sum": 0.0})
+        grouped[key]["count"] += 1
+        grouped[key]["sum"] += record["sum"]
+
+    rows = []
+    for (day, placement, type_value), values in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][1], item[0][2])):
+        rows.append({
+            "Date": day,
+            "Placement": placement,
+            "Type": type_value,
+            "Count": values["count"],
+            "Amount": values["sum"],
+        })
+    return rows
 
 
 def build_inventory_pivot(records, selected_date=None, selected_placement=None, selected_type=None):
@@ -685,6 +733,58 @@ def build_lookup_map(rows, key_candidates, fallback_index=0):
                 "header_index": header_index,
             }
     return lookup
+
+
+def ensure_upload_history_folder():
+    os.makedirs(UPLOAD_HISTORY_DIR, exist_ok=True)
+
+
+def save_masterlist_upload_history(uploaded_file, record_count, total_amount, summary_rows):
+    ensure_upload_history_folder()
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in uploaded_file.name)
+    stored_name = f"masterlist_{timestamp}_{safe_name}"
+    stored_path = os.path.join(UPLOAD_HISTORY_DIR, stored_name)
+
+    with open(stored_path, "wb") as handle:
+        handle.write(uploaded_file.getvalue())
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO masterlist_upload_history (file_name, stored_path, record_count, total_amount, summary_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (uploaded_file.name, stored_path, record_count, total_amount, str(summary_rows)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return stored_path
+
+
+def fetch_upload_history(limit=10):
+    conn = get_db_connection()
+    if not conn:
+        return []
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT file_name, stored_path, uploaded_at, record_count, total_amount
+            FROM masterlist_upload_history
+            ORDER BY uploaded_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
 
 def build_dib_masterlist_workbook(uploaded_file):
@@ -926,18 +1026,43 @@ def main():
                         selected_placement=selected_placement_filter,
                         selected_type=selected_type_filter,
                     )
+                    daily_summary = build_daily_masterlist_summary(inventory_records)
 
                     if summary:
                         total_count = sum(row[f"{placement} Count"] for row in summary for placement in PLACEMENTS)
                         total_sum = sum(row[f"{placement} Sum"] for row in summary for placement in PLACEMENTS)
 
-                        col1, col2 = st.columns(2)
+                        col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric(label="Inventory Row Groups", value=str(len(summary)), label_visibility="visible")
+                            st.metric(label="Records Count", value=str(total_count), label_visibility="visible")
                         with col2:
-                            st.metric(label="Total Sum", value=f"{total_sum:,.2f}", label_visibility="visible")
+                            st.metric(label="Total Amount", value=f"{total_sum:,.2f}", label_visibility="visible")
+                        with col3:
+                            st.metric(label="Daily Groups", value=str(len(summary)), label_visibility="visible")
 
-                        st.dataframe(summary, use_container_width=True, height=420)
+                        st.subheader("Daily Masterlist Summary")
+                        st.dataframe(daily_summary, use_container_width=True, height=340)
+
+                        st.subheader("Placement / Type Breakdown")
+                        placement_type_table = build_placement_type_table(inventory_records)
+                        st.dataframe(placement_type_table, use_container_width=True, height=420)
+
+                        st.subheader("SPMAW / SPMAN / SPQA by Day")
+                        st.dataframe(
+                            [row for row in placement_type_table if row["Placement"] in PLACEMENTS],
+                            use_container_width=True,
+                            height=420,
+                        )
+
+                        st.caption("This table shows all dates up to today, separated by placement and transaction type: MASTERLIST, NEW ENDO, PULL OUT.")
+
+                        stored_path = save_masterlist_upload_history(
+                            hsbc_upload,
+                            record_count=total_count,
+                            total_amount=total_sum,
+                            summary_rows=daily_summary,
+                        )
+                        st.success(f"Masterlist saved for re-checking at: {stored_path}")
                     else:
                         st.warning("No inventory records match the selected filters.")
             except Exception as error:

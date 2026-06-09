@@ -41,6 +41,19 @@ def init_database():
         )
     """)
     
+    # Masterlist upload history table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS masterlist_upload_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_name TEXT NOT NULL,
+            stored_path TEXT NOT NULL,
+            uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            record_count INTEGER DEFAULT 0,
+            total_amount REAL DEFAULT 0,
+            summary_json TEXT
+        )
+    """)
+
     # Activity log table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS activity_log (
